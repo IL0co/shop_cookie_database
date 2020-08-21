@@ -3,6 +3,8 @@
 #endif
 #define _ShopCookies_included_
 
+#define SHOPCOOKIE_DATA_MAXLEN	128	// Максимальная длинна строки для записи данных
+
 /*
  * Получить Cookie игрока по id предмета
  *	-
@@ -36,6 +38,17 @@ native bool Shop_SetClientCookie(int client, ItemId item_id, char[] buffer);
  * @return                -1 при неудаче, или же время в UNIX
 */
 native bool Shop_GetClientCookieTime(int client, ItemId item_id);
+
+public Extension __pl_shop_cookies = 
+{
+	name = "[SHOP] Cookies DataBase",
+	file = "shop_cookies.smx",
+#if defined REQUIRE_PLUGIN
+	required = 1,
+#else
+	required = 0,
+#endif
+};
 
 #if !defined REQUIRE_PLUGIN
 public void __pl_ShopCookies_SetNTVOptional()

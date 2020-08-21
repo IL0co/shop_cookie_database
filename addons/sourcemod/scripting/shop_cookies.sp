@@ -1,5 +1,6 @@
 #include <sourcemod>
 #include <shop>
+#include <shop_cookies>
 
 #pragma semicolon 1
 #pragma newdecls required
@@ -7,14 +8,13 @@
 public Plugin myinfo = 
 {
 	name		= "[SHOP] Cookies DataBase",
-	version		= "1.0.0",
+	version		= "1.0.1",
 	description	= "A cookie module for a shop to save data",
 	author		= "iLoco",
 	url			= "https://github.com/IL0co"
 }
 
 Database db;
-char dbPrefix[64];
 int iId[MAXPLAYERS+1];
 
 public APLRes AskPluginLoad2(Handle plugin, bool late, char[] error, int max)
@@ -30,7 +30,17 @@ public APLRes AskPluginLoad2(Handle plugin, bool late, char[] error, int max)
 public int Native_GetClientCookieTime(Handle plugin, int numParams)
 {
 	int client = GetNativeCell(1);
-	int item_id = GetNativeCell(2);
+
+	if(IsFakeClient(client))
+		ThrowNativeError(SP_ERROR_PARAM, "Client %i is a bot", client);
+	else if(iId[client] == -1)
+		ThrowNativeError(SP_ERROR_PARAM, "Client %i is have invalid 'player_id'", client);
+
+	ItemId item_id = GetNativeCell(2);
+
+	if(!Shop_IsItemExists(item_id))
+		ThrowNativeError(SP_ERROR_PARAM, "ItemId %i id not exist'", item_id);
+
 	int result = -1;
 
 	char buffer[256];
@@ -54,26 +64,34 @@ public int Native_GetClientCookieTime(Handle plugin, int numParams)
 public int Native_GetClientCookie(Handle plugin, int numParams)
 {
 	int client = GetNativeCell(1);
-	int item_id = GetNativeCell(2);
-	int maxlen = GetNativeCell(4);
 
-	char buff[128];
+	if(IsFakeClient(client))
+		ThrowNativeError(SP_ERROR_PARAM, "Client %i is a bot", client);
+	else if(iId[client] == -1)
+		ThrowNativeError(SP_ERROR_PARAM, "Client %i is have invalid 'player_id'", client);
+
+	ItemId item_id = GetNativeCell(2);
+
+	if(!Shop_IsItemExists(item_id))
+		ThrowNativeError(SP_ERROR_PARAM, "ItemId %i id not exist'", item_id);
+
+	char data[SHOPCOOKIE_DATA_MAXLEN];
 	char buffer[256];
 
-	db.Format(buffer, sizeof(buffer), "SELECT `data` FROM `shop_cookies` WHERE `player_id` = %i AND `item_id` = %i", iId[client], item_id);
+	FormatEx(buffer, sizeof(buffer), "SELECT `data` FROM `shop_cookies` WHERE `player_id` = %i AND `item_id` = %i", iId[client], item_id);
 	DBResultSet query = SQL_Query(db, buffer);
 
 	if (query != null)
 	{
 		if(query.FetchRow())
 		{
-			query.FetchString(0, buff, sizeof(buff));
-			SetNativeString(3, buff, maxlen);	
+			query.FetchString(0, data, sizeof(data));
+			SetNativeString(3, data, SHOPCOOKIE_DATA_MAXLEN);	
 		}
 
 		delete query;
 
-		if(buff[0])
+		if(data[0])
 			return true;
 	}
 
@@ -83,15 +101,21 @@ public int Native_GetClientCookie(Handle plugin, int numParams)
 public int Native_SetClientCookie(Handle plugin, int numParams)
 {
 	int client = GetNativeCell(1);
-	int item_id = GetNativeCell(2);
 
-	if(iId[client] < 0)
-		return false;
+	if(IsFakeClient(client))
+		ThrowNativeError(SP_ERROR_PARAM, "Client %i is a bot", client);
+	else if(iId[client] == -1)
+		ThrowNativeError(SP_ERROR_PARAM, "Client %i is have invalid 'player_id'", client);
 
-	char data[128], buffer[256];
+	ItemId item_id = GetNativeCell(2);
+
+	if(!Shop_IsItemExists(item_id))
+		ThrowNativeError(SP_ERROR_PARAM, "ItemId %i id not exist'", item_id);
+		
+	char data[SHOPCOOKIE_DATA_MAXLEN], buffer[384];
 	GetNativeString(3, data, sizeof(data));	
 
-	db.Format(buffer, sizeof(buffer), "SELECT `id` FROM `shop_cookies` WHERE `player_id` = %i AND `item_id` = %i", iId[client], item_id);
+	FormatEx(buffer, sizeof(buffer), "SELECT `id` FROM `shop_cookies` WHERE `player_id` = %i AND `item_id` = %i", iId[client], item_id);
 	DBResultSet query = SQL_Query(db, buffer);
 
 	if (query != null)
@@ -122,25 +146,7 @@ public void OnPluginStart()
 
 public void Shop_OnAuthorized(int client)
 {
-	iId[client] = -1;
-
-	char buff[64], buffer[256];
-
-	GetCmdArg(1, buff, sizeof(buff));
-	GetClientAuthId(client, AuthId_Steam2, buff, sizeof(buff));
-	
-	db.Format(buffer, sizeof(buffer), "SELECT `id` FROM `%splayers` WHERE `auth` = '%s'", dbPrefix, buff);
-	DBResultSet query = SQL_Query(db, buffer);
-
-	if (query != null)
-	{
-		if(query.FetchRow())
-		{
-			iId[client] = query.FetchInt(0);
-		}
-
-		delete query;
-	}
+	iId[client] = Shop_GetClientId(client);
 }
 
 public void Shop_Started()
@@ -152,9 +158,13 @@ public void Shop_Started()
 		delete db;
 	db = Shop_GetDatabase();
 
-	db.Query(SQL_Callback_ErrorCheck, "CREATE TABLE IF NOT EXISTS `shop_cookies` (`id` int(11) NOT NULL AUTO_INCREMENT, `data` varchar(128) NOT NULL default 'unknown', `player_id` int(11) NOT NULL, `item_id` int(11) NOT NULL, `last_update` int(20) NOT NULL, PRIMARY KEY (`id`));");
+	char driver[12];
+	db.Driver.GetIdentifier(driver, sizeof(driver));
 
-	Shop_GetDatabasePrefix(dbPrefix, sizeof(dbPrefix));
+	if(StrEqual(driver, "sqlite", false))		
+		db.Query(SQL_Callback_ErrorCheck, "CREATE TABLE IF NOT EXISTS `shop_cookies` (`auth` int(11) NOT NULL, `data` varchar(%i) NOT NULL, `player_id` int(11) NOT NULL, `item_id` int(11) NOT NULL, `last_update` int() NOT NULL);", SHOPCOOKIE_DATA_MAXLEN);
+	else
+		db.Query(SQL_Callback_ErrorCheck, "CREATE TABLE IF NOT EXISTS `shop_cookies` (`id` int(11) NOT NULL AUTO_INCREMENT, `data` varchar(%i) NOT NULL default 'unknown', `player_id` int(11) NOT NULL, `item_id` int(11) NOT NULL, `last_update` int() NOT NULL, PRIMARY KEY (`id`));", SHOPCOOKIE_DATA_MAXLEN);
 }
 
 public void SQL_Callback_ErrorCheck(Database hOwner, DBResultSet hResult, const char[] szError, any data)
